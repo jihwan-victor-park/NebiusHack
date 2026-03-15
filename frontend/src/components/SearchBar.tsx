@@ -1,20 +1,21 @@
 "use client";
+
 import { useState } from "react";
 
-export default function SearchBar({ onSearch }: { onSearch: (q: string) => void }) {
+export default function SearchBar({ onSearch }) {
   const [query, setQuery] = useState("");
+
   return (
-    <div className="flex gap-2">
+    <div className="flex gap-3">
       <input
-        className="flex-1 border rounded-lg px-4 py-2 text-sm"
-        placeholder='e.g. "handmade ceramic mug under $40, ships in a week"'
         value={query}
-        onChange={e => setQuery(e.target.value)}
-        onKeyDown={e => e.key === "Enter" && onSearch(query)}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="e.g. handmade ceramic mug"
+        className="border px-4 py-2 rounded"
       />
       <button
-        className="bg-blue-600 text-white px-6 py-2 rounded-lg text-sm hover:bg-blue-700"
         onClick={() => onSearch(query)}
+        className="bg-blue-600 text-white px-4 py-2 rounded"
       >
         Search
       </button>

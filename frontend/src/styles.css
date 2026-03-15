@@ -1,0 +1,36 @@
+/* Add asterisk for required labels */
+vaadin-date-picker[required]::part(label)::after,
+vaadin-time-picker[required]::part(label)::after,
+vaadin-select[required]::part(label)::after,
+vaadin-text-area[required]::part(label)::after,
+vaadin-number-field[required]::part(label)::after {
+  content: " *";
+  color: var(--lumo-primary-color, #1976d2);
+}
+
+/* Consistent spacing between label and field */
+[part='label'] {
+  margin-bottom: 0.25rem;
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 1.25rem;
+}
+
+.h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem 0;
+}
+
+.section {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.row-full {
+  grid-column: 1 / -1;
+}
