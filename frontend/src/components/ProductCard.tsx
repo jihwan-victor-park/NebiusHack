@@ -1,97 +1,136 @@
 import { Product } from "@/app/page";
 
-const SOURCE_LABELS: Record<string, string> = {
-  amazon: "Amazon",
-  walmart: "Walmart",
-  etsy: "Etsy",
-  indie: "Indie shop",
-  shopify: "Shopify",
+const SOURCE_LABEL: Record<string, string> = {
+  amazon: "Amazon", walmart: "Walmart",
+  etsy: "Etsy", indie: "Independent", shopify: "Shopify",
+  nordstrom: "Nordstrom",
 };
 
-const RANK_COLORS = ["text-yellow-400", "text-white/50", "text-orange-700"];
+const RANK_BADGE = [
+  { bg: "bg-black",      text: "text-white",      label: "1st" },
+  { bg: "bg-[#444]",     text: "text-white",      label: "2nd" },
+  { bg: "bg-[#888]",     text: "text-white",      label: "3rd" },
+];
 
-function ScoreBar({ label, value, color }: { label: string; value: number; color: string }) {
+function ReviewCount({ count }: { count: number }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-white/35 w-16 shrink-0 text-right text-xs">{label}</span>
-      <div className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${value * 100}%` }} />
-      </div>
-      <span className="text-white/40 w-7 text-right text-xs">{(value * 100).toFixed(0)}</span>
-    </div>
+    <span className="text-[#999]">
+      ({count >= 1000 ? `${(count / 1000).toFixed(1)}k` : count})
+    </span>
   );
 }
 
 export default function ProductCard({ product: p, rank }: { product: Product; rank: number }) {
-  const rankColor = RANK_COLORS[rank - 1] ?? "text-white/30";
+  const badge = RANK_BADGE[rank - 1];
 
   return (
-    <div className="border border-white/10 rounded-xl overflow-hidden bg-white/3 hover:bg-white/5 transition-all">
-      {/* Product image */}
-      {p.image_url && (
-        <div className="w-full h-40 bg-white/5 overflow-hidden">
+    <div className="group bg-white border border-[#222] rounded-none overflow-hidden w-full
+                    hover:shadow-[3px_3px_0px_0px_#222] transition-shadow duration-150">
+
+      {/* Image */}
+      <div className="relative w-full h-36 bg-[#f5f5f5] border-b border-[#222] overflow-hidden">
+        {p.image_url ? (
           <img
             src={p.image_url}
             alt={p.name}
-            className="w-full h-full object-contain p-2"
-            onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+            onError={e => {
+              (e.target as HTMLImageElement).style.display = "none";
+            }}
           />
-        </div>
-      )}
-
-      <div className="p-4">
-        {/* Top row: rank + name + price */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-2.5 min-w-0">
-            <span className={`font-bold text-sm mt-0.5 shrink-0 ${rankColor}`}>#{rank}</span>
-            <div className="min-w-0">
-              <p className="font-medium text-sm leading-snug line-clamp-2">
-                {p.url ? (
-                  <a href={p.url} target="_blank" rel="noopener noreferrer" className="hover:underline">
-                    {p.name || "Unknown product"}
-                  </a>
-                ) : (
-                  p.name || "Unknown product"
-                )}
-              </p>
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1">
-                <span className="text-xs text-white/35">{SOURCE_LABELS[p.source] ?? p.source}</span>
-                {p.rating != null && (
-                  <span className="text-xs text-yellow-400/80">
-                    ★ {p.rating.toFixed(1)}
-                    {p.review_count != null && (
-                      <span className="text-white/30"> ({p.review_count.toLocaleString()})</span>
-                    )}
-                  </span>
-                )}
-                {p.shipping_days != null && (
-                  <span className="text-xs text-white/30">· {p.shipping_days}d shipping</span>
-                )}
-              </div>
-            </div>
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <span className="text-[#ccc] text-xs tracking-widest uppercase">No image</span>
           </div>
-
-          {/* Price + score */}
-          <div className="text-right shrink-0">
-            <p className="font-bold text-base">{p.price > 0 ? `$${p.price.toFixed(2)}` : "—"}</p>
-            <p className="text-xs text-white/35 mt-0.5">score {(p.final_score * 100).toFixed(0)}</p>
-          </div>
-        </div>
-
-        {/* Score bars */}
-        <div className="mt-3 space-y-1.5">
-          <ScoreBar label="Price"    value={p.price_score}    color="bg-blue-400" />
-          <ScoreBar label="Shipping" value={p.shipping_score} color="bg-purple-400" />
-          <ScoreBar label="Quality"  value={p.quality_score}  color="bg-yellow-400" />
-          <ScoreBar label="Ethics"   value={p.ethics_score}   color="bg-green-400" />
-        </div>
-
-        {/* Reasoning */}
-        {p.reasoning && (
-          <p className="mt-3 text-xs text-white/35 italic leading-relaxed border-t border-white/5 pt-3">
-            {p.reasoning}
-          </p>
         )}
+
+        {/* Rank badge — top-left corner */}
+        {badge && (
+          <div className={`absolute top-2 left-2 ${badge.bg} ${badge.text}
+                          text-[10px] font-bold tracking-widest uppercase
+                          px-2 py-0.5`}>
+            {badge.label}
+          </div>
+        )}
+
+        {/* Source tag — top-right */}
+        <div className="absolute top-2 right-2 bg-white border border-black
+                        text-[9px] font-semibold tracking-widest uppercase px-2 py-0.5">
+          {SOURCE_LABEL[p.source] ?? p.source}
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="p-3 space-y-2.5">
+
+        {/* Name + price row */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            {p.url ? (
+              <a
+                href={p.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[13px] font-semibold text-black leading-snug line-clamp-2
+                           hover:underline underline-offset-2 block"
+              >
+                {p.name || "—"}
+              </a>
+            ) : (
+              <p className="text-[13px] font-semibold text-black leading-snug line-clamp-2">
+                {p.name || "—"}
+              </p>
+            )}
+          </div>
+
+          {p.price != null && p.price > 0 && (
+            <span className="text-base font-black text-black shrink-0 tabular-nums">
+              ${p.price.toFixed(2)}
+            </span>
+          )}
+        </div>
+
+        {/* Stats row */}
+        <div className="flex items-center gap-0 border-t border-[#e5e5e5] pt-2.5">
+
+          {/* Rating */}
+          <div className="flex-1 flex flex-col items-center gap-0.5
+                          border-r border-[#ddd] last:border-r-0 px-1">
+            <span className="text-[9px] font-bold uppercase tracking-widest text-[#555]">Rating</span>
+            {p.rating != null ? (
+              <span className="text-xs font-bold text-black tabular-nums">
+                ★ {p.rating.toFixed(1)}
+                {p.review_count != null && <ReviewCount count={p.review_count} />}
+              </span>
+            ) : (
+              <span className="text-xs text-[#bbb] font-medium">—</span>
+            )}
+          </div>
+
+          {/* Shipping */}
+          <div className="flex-1 flex flex-col items-center gap-0.5
+                          border-r border-[#ddd] last:border-r-0 px-1">
+            <span className="text-[9px] font-bold uppercase tracking-widest text-[#555]">Ships in</span>
+            {p.shipping_days != null ? (
+              <span className="text-xs font-bold text-black tabular-nums">
+                {p.shipping_days === 0 ? "Today"
+                 : p.shipping_days === 1 ? "1 day"
+                 : `${p.shipping_days} days`}
+              </span>
+            ) : (
+              <span className="text-xs text-[#bbb] font-medium">—</span>
+            )}
+          </div>
+
+          {/* Price (if missing from header, shown here) */}
+          {(p.price == null || p.price === 0) && (
+            <div className="flex-1 flex flex-col items-center gap-0.5 px-1">
+              <span className="text-[9px] font-bold uppercase tracking-widest text-[#555]">Price</span>
+              <span className="text-xs text-[#bbb] font-medium">—</span>
+            </div>
+          )}
+
+        </div>
       </div>
     </div>
   );

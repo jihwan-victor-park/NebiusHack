@@ -7,6 +7,7 @@ from typing import Optional, List
 class ParsedIntent(BaseModel):
     item: str                          # core item, e.g. "ceramic mug"
     attributes: List[str] = []         # ["handmade", "hand-thrown", "stoneware"]
+    min_price: Optional[float] = None
     max_price: Optional[float] = None
     max_shipping_days: Optional[int] = None
     preference: str = ""               # free-text user preference summary
@@ -62,7 +63,8 @@ class SearchContext(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str
-    user_location: Optional[str] = None   # for Google Maps local search
+    result_count: int = 3              # how many results to show per column
+    user_location: Optional[str] = None
     prefer_local: bool = False
     cheapest_first: bool = False
     fastest_shipping: bool = False

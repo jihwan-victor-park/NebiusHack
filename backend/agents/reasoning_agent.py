@@ -47,8 +47,11 @@ PREF_W = {
     "prefer_local":     {"price": 0.15, "shipping": 0.10, "quality": 0.30, "ethics": 0.45},
     "eco_friendly":     {"price": 0.15, "shipping": 0.10, "quality": 0.30, "ethics": 0.45},
 }
+SMALL_BIZ_W = {"price": 0.20, "shipping": 0.15, "quality": 0.25, "ethics": 0.40}
 
 def _weights(prefs: dict) -> dict:
+    if prefs.get("prioritize_small_biz"):
+        return SMALL_BIZ_W
     for k, w in PREF_W.items():
         if prefs.get(k):
             return w
@@ -113,7 +116,8 @@ class ReasoningAgent:
                 "Return JSON with keys:\n"
                 "  item               (string — core product)\n"
                 "  attributes         (array of strings — material, style, use case, etc.)\n"
-                "  max_price          (float or null)\n"
+                "  min_price          (float or null — lower bound, e.g. 30 from '$30-$60')\n"
+                "  max_price          (float or null — upper bound, e.g. 60 from '$30-$60' or 'under $60')\n"
                 "  max_shipping_days  (int or null)\n"
                 "  preference         (string — one sentence on what matters most to the user)\n"
                 "Return ONLY valid JSON."

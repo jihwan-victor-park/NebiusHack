@@ -58,7 +58,7 @@ Return ONLY valid JSON."""
 
 class ConversationAgent:
 
-    async def chat(self, session: SessionData, user_message: str) -> dict:
+    async def chat(self, session: SessionData, user_message: str, prioritize_small_biz: bool = False, result_count: int = 3) -> dict:
         """
         Process one turn. Returns:
           { response, products, action, big_tech, small_biz }
@@ -66,49 +66,56 @@ class ConversationAgent:
         # Append user message to history
         session.messages.append({"role": "user", "content": user_message})
 
-        # Build context for the LLM decision
-        history_text = "\n".join(
-            f"{m['role'].upper()}: {m['content']}"
-            for m in session.messages[-8:]  # last 8 turns
-        )
-        products_summary = ""
-        if session.products:
+        # First-ever search: skip LLM decision, always search immediately
+        if not session.products:
+            action   = "search"
+            response = "Searching for the best options…"
+            decision = {"refined_query": user_message}
+        else:
+            # Subsequent turns: LLM decides (rerank / search / answer)
+            history_text = "\n".join(
+                f"{m['role'].upper()}: {m['content']}"
+                for m in session.messages[-8:]
+            )
             tops = session.products[:6]
             products_summary = "\nCurrent top results:\n" + "\n".join(
                 f"  {i+1}. {p.get('name','?')} — ${p.get('price',0)} ({p.get('source','?')})"
                 for i, p in enumerate(tops)
             )
-
-        # Step 1: LLM decides action
-        resp = await llm.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": DECISION_PROMPT},
-                {"role": "user", "content": f"CONVERSATION:\n{history_text}{products_summary}"},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.2,
-            max_tokens=400,
-        )
-        decision = json.loads(resp.choices[0].message.content)
-        action   = decision.get("action", "answer")
-        response = decision.get("response", "Got it!")
+            resp = await llm.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": DECISION_PROMPT},
+                    {"role": "user", "content": f"CONVERSATION:\n{history_text}{products_summary}"},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.2,
+                max_tokens=300,
+            )
+            decision = json.loads(resp.choices[0].message.content)
+            action   = decision.get("action", "answer")
+            response = decision.get("response", "Got it!")
 
         # Step 2: execute
         updated_products = session.products  # default: keep existing
 
         if action == "search":
             query = decision.get("refined_query") or user_message
-            print(f"[conv] re-searching: '{query}'")
-            req = SearchRequest(query=query)
+            print(f"[conv] re-searching: '{query}' result_count={result_count}")
+            req = SearchRequest(query=query, result_count=result_count)
             sr  = await _shopper.run(req)
             updated_products = [p.model_dump() for p in sr.all_results]
+            if prioritize_small_biz and session.intent:
+                intent = ParsedIntent(**session.intent) if isinstance(session.intent, dict) else session.intent
+                updated_products = score_products(updated_products, intent, {"prioritize_small_biz": True})
             session.products = updated_products
             if sr.best_big_tech:
                 session.intent = sr.context.intent.model_dump()
 
         elif action == "rerank":
             prefs = decision.get("prefs", {})
+            if prioritize_small_biz:
+                prefs["prioritize_small_biz"] = True
             print(f"[conv] reranking with prefs: {prefs}")
             if session.products and session.intent:
                 intent = ParsedIntent(**session.intent)
@@ -116,11 +123,12 @@ class ConversationAgent:
                 updated_products = rescored
                 session.products = rescored
 
-        # Step 3: split into big-tech / small-biz
-        BIG_TECH  = {"amazon", "walmart"}
-        SMALL_BIZ = {"etsy", "shopify", "indie"}
-        big_tech  = [p for p in updated_products if p.get("source") in BIG_TECH][:3]
-        small_biz = [p for p in updated_products if p.get("source") in SMALL_BIZ][:3]
+        # Step 3: split into big-tech / small-biz, capped by result_count
+        _BIG   = {"amazon", "nordstrom", "walmart"}
+        _SMOL  = {"etsy", "shopify", "indie"}
+        limit  = 6 if result_count >= 4 else result_count
+        big_tech  = [p for p in updated_products if p.get("source") in _BIG][:limit]
+        small_biz = [p for p in updated_products if p.get("source") in _SMOL][:limit]
 
         # Append agent response to history
         session.messages.append({"role": "assistant", "content": response})

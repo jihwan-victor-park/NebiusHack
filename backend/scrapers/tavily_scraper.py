@@ -9,10 +9,16 @@ Three modes:
 Images: include_images=True on every call → first image matched to each product.
 """
 import os
+import re
 import json
 import asyncio
 from openai import AsyncOpenAI
 from tavily import TavilyClient
+
+IMG_RE = re.compile(
+    r'https?://[^\s"\'<>\]]+\.(?:jpg|jpeg|png|webp|gif)(?:\?[^\s"\'<>\]]*)?',
+    re.IGNORECASE,
+)
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 MODEL = "meta-llama/Llama-3.3-70B-Instruct"
@@ -22,15 +28,21 @@ llm = AsyncOpenAI(
     base_url="https://api.studio.nebius.ai/v1",
 )
 
-EXTRACT_PROMPT = """Extract product listings from these search result snippets.
+EXTRACT_PROMPT = """Extract individual product listings from the content below.
+Each content block starts with "URL: <url>" — use that exact URL for the product's url field.
 Return JSON: { "products": [ { name, price, url, image_url, shipping_days, rating, review_count, seller } ] }
-- price: float USD (null if unknown)
-- image_url: best product image URL found in the content (null if none)
-- shipping_days: int estimate (null if unknown)
-- rating: float 0-5 (null if unknown)
-- review_count: int (null if unknown)
+
+Field rules:
+- name: product title
+- price: float USD — scan for "$29.99", "29.99", "USD 29.99", "Price: 30" patterns (null only if truly absent)
+- url: copy the URL from the "URL:" line at the start of that product's content block — never use a search page URL
+- image_url: pick the best matching product image from the Available images list (null if none)
+- shipping_days: int — "2-day"→2, "Prime"→2, "standard"→5, "ships in X days"→X, null if unknown
+- rating: float 0-5 — look for "4.5 out of 5", "★4.2", "4.5 stars" (null if absent)
+- review_count: int — look for "(1,234 reviews)", "1234 ratings" (null if absent)
 - seller: seller/shop name (null if unknown)
-Only real products. Return ONLY valid JSON."""
+
+One product per URL block. Return ONLY valid JSON."""
 
 INDIE_BLOCKLIST = {
     "amazon.com", "walmart.com", "etsy.com", "ebay.com",
@@ -40,6 +52,33 @@ INDIE_BLOCKLIST = {
 }
 
 SMALL_BIZ_DEFAULTS = {"amazon": 0.1, "walmart": 0.05, "etsy": 0.85, "indie": 0.9}
+
+# site: query scoped to product-page paths → every result is a real product
+SITE_PRODUCT_QUERY = {
+    "amazon":  "site:amazon.com/dp/",
+    "etsy":    "site:etsy.com/listing/",
+    "walmart": "site:walmart.com/ip/",
+}
+
+def _dedup(images: list[str], limit: int = 15) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for img in images:
+        if img not in seen:
+            seen.add(img)
+            out.append(img)
+        if len(out) >= limit:
+            break
+    return out
+
+def _fill_images(products: list[dict], images: list[str]) -> None:
+    """Assign unused Tavily images to products that the LLM left without one."""
+    used = {p.get("image_url") for p in products if p.get("image_url")}
+    spare = [img for img in images if img not in used]
+    spare_iter = iter(spare)
+    for p in products:
+        if not p.get("image_url"):
+            p["image_url"] = next(spare_iter, None)
 
 
 class TavilyScraper:
@@ -63,6 +102,22 @@ class TavilyScraper:
             print(f"[tavily] search error '{query}': {e}")
             return {}
 
+    def _do_search_advanced(self, query: str, max_results: int = 8) -> dict:
+        """Advanced depth — Tavily crawls each result page, content includes prices."""
+        if not self._client:
+            return {}
+        try:
+            return self._client.search(
+                query=query,
+                search_depth="advanced",
+                max_results=max_results,
+                include_images=True,
+                include_raw_content=False,
+            )
+        except Exception as e:
+            print(f"[tavily] advanced search error '{query}': {e}")
+            return {}
+
     def _do_extract(self, urls: list[str]) -> dict:
         if not self._client or not urls:
             return {}
@@ -78,6 +133,10 @@ class TavilyScraper:
     async def _search(self, query: str, max_results: int = 8) -> dict:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._do_search, query, max_results)
+
+    async def _search_advanced(self, query: str, max_results: int = 8) -> dict:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._do_search_advanced, query, max_results)
 
     async def _extract(self, urls: list[str]) -> dict:
         loop = asyncio.get_event_loop()
@@ -100,7 +159,7 @@ class TavilyScraper:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.1,
-                max_tokens=1500,
+                max_tokens=900,
             )
             data = json.loads(resp.choices[0].message.content)
             return data.get("products", [])
@@ -123,15 +182,19 @@ class TavilyScraper:
 
     async def search_site(self, keywords: str, site: str, source: str) -> list[dict]:
         """
-        Search a specific retail site via Tavily.
-        e.g. search_site("red dress", "amazon.com", "amazon")
+        Uses a path-scoped site: query (e.g. site:amazon.com/dp/) so every
+        result is a real product page — no search/category pages slip through.
         """
-        resp = await self._search(f"{keywords} site:{site}", max_results=8)
+        site_q = SITE_PRODUCT_QUERY.get(source, f"site:{site}")
+        query  = f"{keywords} {site_q}"
+        resp   = await self._search(query, max_results=8)
         if not resp:
             return []
 
         results = resp.get("results", [])
-        images  = resp.get("images", [])
+        images  = _dedup(resp.get("images", []))
+
+        print(f"[tavily:{source}] '{query}' → {len(results)} results")
 
         content = "\n\n".join(
             f"URL: {r.get('url','')}\nTitle: {r.get('title','')}\n{r.get('content','')}"
@@ -169,25 +232,44 @@ class TavilyScraper:
         print(f"[tavily] {len(indie_urls)} indie URLs found")
 
         if not indie_urls:
-            # Fall back to snippets from the search results
-            content = "\n\n".join(
+            content  = "\n\n".join(
                 f"URL: {r.get('url','')}\nTitle: {r.get('title','')}\n{r.get('content','')}"
                 for r in results
             )
-            images = resp.get("images", [])
+            images   = _dedup(resp.get("images", []))
             products = await self._llm_extract(content, images, keywords, "indie")
-            return self._stamp(products, "indie")
+            stamped  = self._stamp(products, "indie")
+            _fill_images(stamped, images)
+            return [p for p in stamped if p.get("image_url")]
 
         # Step 3: deep extract indie pages
         extract_resp = await self._extract(indie_urls)
         extracted = extract_resp.get("results", [])
-        images = extract_resp.get("images", [])
 
-        content = "\n\n".join(
-            f"URL: {r.get('url','')}\n{r.get('raw_content','')[:1500]}"
-            for r in extracted
-        )
+        # Collect images: from Tavily response + scraped from raw_content
+        images: list[str] = list(extract_resp.get("images", []))
+        content_parts = []
+        for r in extracted:
+            raw = r.get("raw_content", "") or ""
+            content_parts.append(f"URL: {r.get('url','')}\n{raw[:1500]}")
+            # parse any image URLs embedded in the raw content
+            found = IMG_RE.findall(raw)
+            images.extend(found[:8])
 
-        # Step 4: LLM extracts products
-        products = await self._llm_extract(content, images, keywords, "indie")
-        return self._stamp(products, "indie")
+        # Deduplicate images, keep first 15
+        seen: set[str] = set()
+        unique_images: list[str] = []
+        for img in images:
+            if img not in seen:
+                seen.add(img)
+                unique_images.append(img)
+            if len(unique_images) >= 15:
+                break
+
+        content = "\n\n".join(content_parts)
+
+        # Step 4: LLM extracts products — fill missing images, then filter
+        products = await self._llm_extract(content, unique_images, keywords, "indie")
+        stamped  = self._stamp(products, "indie")
+        _fill_images(stamped, unique_images)
+        return [p for p in stamped if p.get("image_url")]

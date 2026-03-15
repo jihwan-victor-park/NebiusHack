@@ -29,13 +29,15 @@ async def create_session():
 
 class ChatRequest(BaseModel):
     message: str
+    prioritize_small_biz: bool = False
+    result_count: int = 3
 
 @router.post("/session/{session_id}/chat")
 async def chat(session_id: str, req: ChatRequest):
     session = get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    result = await conv.chat(session, req.message)
+    result = await conv.chat(session, req.message, req.prioritize_small_biz, req.result_count)
     return result
 
 

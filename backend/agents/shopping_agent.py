@@ -1,28 +1,48 @@
 """
-ShoppingAgent — agentic pipeline (all scraping via Tavily).
+ShoppingAgent — fast pipeline using only SerpAPI (no LLM on the search path).
 
-  STEP 2  parse_intent    raw query → ParsedIntent
-  STEP 3  parallel search (all via Tavily, ~2-4s total):
-            Tavily → amazon.com   → LLM extracts products + images
-            Tavily → etsy.com     → LLM extracts products + images
-            Tavily → indie shops  → extract() deep scrape → LLM extracts + images
-  STEP 4  score           weighted formula (price/shipping/quality/ethics)
-  STEP 5  pick            top 3 big-tech + top 3 small-biz with LLM reasoning
+  STEP 1  regex price extraction  — instant, no LLM
+  STEP 2  parallel SerpAPI calls  — Amazon + Google Shopping (~3-5s total)
+  STEP 3  score                   — weighted formula
 """
+import re
 import asyncio
-from agents.reasoning_agent import ReasoningAgent, score_products
-from scrapers.tavily_scraper import TavilyScraper
-from api.models import SearchRequest, SearchResponse, SearchContext, Pick, Product
+from agents.reasoning_agent import score_products
+from scrapers.serpapi_scraper import search_amazon, search_shopping
+from api.models import SearchRequest, SearchResponse, SearchContext, Pick, Product, ParsedIntent
 
-BIG_TECH  = {"amazon", "walmart"}
-SMALL_BIZ = {"etsy", "shopify", "indie"}
+# ── Fast regex price extraction (replaces LLM parse_intent) ──────────────────
 
+_RANGE_RE = re.compile(
+    r'\$?\s*(\d+(?:\.\d+)?)\s*[-–to]+\s*\$?\s*(\d+(?:\.\d+)?)', re.I
+)
+_MAX_RE = re.compile(
+    r'(?:under|below|max|within|less\s+than)\s*\$?\s*(\d+(?:\.\d+)?)', re.I
+)
+_MIN_RE = re.compile(
+    r'(?:over|above|min|at\s+least|more\s+than)\s*\$?\s*(\d+(?:\.\d+)?)', re.I
+)
+
+def _parse_price(query: str) -> tuple[float | None, float | None, str]:
+    """Returns (min_price, max_price, clean_keywords)."""
+    m = _RANGE_RE.search(query)
+    if m:
+        return float(m.group(1)), float(m.group(2)), _RANGE_RE.sub("", query).strip()
+    min_m = _MIN_RE.search(query)
+    max_m = _MAX_RE.search(query)
+    clean = query
+    if min_m: clean = _MIN_RE.sub("", clean, count=1)
+    if max_m: clean = _MAX_RE.sub("", clean, count=1)
+    return (
+        float(min_m.group(1)) if min_m else None,
+        float(max_m.group(1)) if max_m else None,
+        clean.strip(),
+    )
+
+
+# ── Agent ─────────────────────────────────────────────────────────────────────
 
 class ShoppingAgent:
-    def __init__(self):
-        self.reasoner = ReasoningAgent()
-        self.tavily   = TavilyScraper()
-
     async def run(self, req: SearchRequest) -> SearchResponse:
         prefs = {
             "prefer_local":     req.prefer_local,
@@ -31,41 +51,48 @@ class ShoppingAgent:
             "eco_friendly":     req.eco_friendly,
         }
 
-        # Step 2: parse intent
-        intent = await self.reasoner.parse_intent(req.query)
-        keywords = f"{intent.item} {' '.join(intent.attributes)}".strip()
-        print(f"[agent] intent: {intent}")
+        # Step 1: instant price extraction (no LLM)
+        min_price, max_price, keywords = _parse_price(req.query)
+        intent = ParsedIntent(
+            item=keywords or req.query,
+            min_price=min_price,
+            max_price=max_price,
+            preference=req.query,
+        )
+        print(f"[agent] keywords='{keywords}' price={min_price}-{max_price}")
 
-        # Step 3: all searches in parallel via Tavily
-        amazon_products, etsy_products, indie_products = await asyncio.gather(
-            self.tavily.search_site(keywords, "amazon.com", "amazon"),
-            self.tavily.search_site(keywords, "etsy.com",   "etsy"),
-            self.tavily.search_indie(keywords),
+        # fetch_n: how many results to pull per source
+        fetch_n = {1: 4, 2: 6, 3: 8}.get(req.result_count, 12)
+
+        # Step 2: two parallel SerpAPI calls only — no Tavily, no LLM
+        amazon_products, shopping_products = await asyncio.gather(
+            search_amazon(keywords or req.query,
+                          num=fetch_n, min_price=min_price, max_price=max_price),
+            search_shopping(keywords or req.query,
+                            num=fetch_n, min_price=min_price, max_price=max_price),
             return_exceptions=True,
         )
 
-        all_products = []
-        for batch in (amazon_products, etsy_products, indie_products):
-            if isinstance(batch, list):
-                all_products.extend(batch)
+        all_products: list[dict] = []
+        seen_urls:   set[str]   = set()
+        for batch in (amazon_products, shopping_products):
+            if not isinstance(batch, list):
+                continue
+            for p in batch:
+                url = p.get("url") or ""
+                if url and url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                all_products.append(p)
 
         print(f"[agent] collected {len(all_products)} products")
 
-        # Step 4: score
+        # Step 3: score
         scored = score_products(all_products, intent, prefs)
 
-        # Step 5: split and pick top 3 each
-        big_tech_list  = [p for p in scored if p.get("source") in BIG_TECH][:3]
-        small_biz_list = [p for p in scored if p.get("source") in SMALL_BIZ][:3]
-
-        big_tech_raw, small_biz_raw = await asyncio.gather(
-            self.reasoner.pick_best(big_tech_list,  intent, "big retailer"),
-            self.reasoner.pick_best(small_biz_list, intent, "small / independent business"),
-        )
-
         return SearchResponse(
-            best_big_tech  = _to_pick(big_tech_raw),
-            best_small_biz = _to_pick(small_biz_raw),
+            best_big_tech  = None,
+            best_small_biz = None,
             all_results    = [_to_product(p) for p in scored],
             context        = SearchContext(
                 intent      = intent,
