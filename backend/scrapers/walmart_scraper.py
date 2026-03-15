@@ -1,7 +1,9 @@
 """
-Walmart scraper using Playwright.
+Walmart scraper using AX Tree Converter.
 """
 from playwright.async_api import async_playwright
+from scrapers.ax_converter import extract_products
+
 
 class WalmartScraper:
     async def search(self, keywords: str, filters: dict) -> list:
@@ -9,20 +11,7 @@ class WalmartScraper:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
             await page.goto(f"https://www.walmart.com/search?q={keywords.replace(' ', '+')}")
-            items = await page.query_selector_all("[data-item-id]")
-            products = []
-            for item in items[:5]:
-                name = await item.query_selector(".sans-serif")
-                price = await item.query_selector("[itemprop='price']")
-                products.append({
-                    "name": await name.inner_text() if name else "",
-                    "price": float(await price.get_attribute("content") if price else 0),
-                    "source": "walmart",
-                    "url": "",
-                    "shipping_days": 3,
-                    "rating": None,
-                    "small_biz_score": 0.05,
-                    "reasoning": "",
-                })
+            products, action = await extract_products(page, keywords, "walmart")
+            # TODO: pass action to Lucas for navigation if needed
             await browser.close()
             return products
