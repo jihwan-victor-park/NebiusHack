@@ -3,6 +3,9 @@ import { useState, useRef } from "react";
 import ProductGrid from "@/components/ProductGrid";
 import LoadingState from "@/components/LoadingState";
 
+const DEMO_USER = "team";
+const DEMO_PASS = "shopagent2024";
+
 export interface Product {
   name: string;
   price: number;
@@ -24,6 +27,13 @@ export interface Product {
 const API = "http://localhost:8000";
 
 export default function Home() {
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  const [authed, setAuthed]       = useState(false);
+  const [loginUser, setLoginUser] = useState("");
+  const [loginPass, setLoginPass] = useState("");
+  const [loginErr, setLoginErr]   = useState(false);
+
+  // ── App ───────────────────────────────────────────────────────────────────
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [query, setQuery]         = useState("");
   const [agentMsg, setAgentMsg]   = useState<string | null>(null);
@@ -34,6 +44,33 @@ export default function Home() {
   const [loading, setLoading]     = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // ── Auth handlers ─────────────────────────────────────────────────────────
+  function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    if (loginUser.trim() === DEMO_USER && loginPass === DEMO_PASS) {
+      setAuthed(true);
+      setLoginErr(false);
+    } else {
+      setLoginErr(true);
+    }
+  }
+
+  function handleLogout() {
+    setAuthed(false);
+    setLoginUser("");
+    setLoginPass("");
+    setLoginErr(false);
+    // clear app state
+    setSessionId(null);
+    setQuery("");
+    setAgentMsg(null);
+    setAction(null);
+    setBigTech([]);
+    setSmallBiz([]);
+    setHistory([]);
+  }
+
+  // ── Search handlers ───────────────────────────────────────────────────────
   async function ensureSession(): Promise<string> {
     if (sessionId) return sessionId;
     const res  = await fetch(`${API}/session`, { method: "POST" });
@@ -77,19 +114,79 @@ export default function Home() {
 
   const hasResults = bigTech.length > 0 || smallBiz.length > 0;
 
+  // ── Login screen ──────────────────────────────────────────────────────────
+  if (!authed) return (
+    <div className="min-h-screen bg-[#0f0f0f] text-white flex flex-col items-center justify-center px-4">
+      <div className="w-full max-w-sm space-y-8">
+
+        {/* Brand */}
+        <div className="text-center space-y-1">
+          <p className="font-bold text-xl tracking-tight">ShopAgent</p>
+          <p className="text-white/35 text-sm">powered by Nebius</p>
+        </div>
+
+        {/* Card */}
+        <div className="bg-white/5 border border-white/10 rounded-2xl px-8 py-8 space-y-5">
+          <p className="text-sm text-white/50">Sign in to continue</p>
+          <form onSubmit={handleLogin} className="space-y-3">
+            <input
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm
+                         placeholder:text-white/25 focus:outline-none focus:border-white/30 transition-all"
+              placeholder="Username"
+              value={loginUser}
+              onChange={e => { setLoginUser(e.target.value); setLoginErr(false); }}
+              autoComplete="username"
+              autoFocus
+            />
+            <input
+              type="password"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm
+                         placeholder:text-white/25 focus:outline-none focus:border-white/30 transition-all"
+              placeholder="Password"
+              value={loginPass}
+              onChange={e => { setLoginPass(e.target.value); setLoginErr(false); }}
+              autoComplete="current-password"
+            />
+            {loginErr && (
+              <p className="text-red-400/70 text-xs">Incorrect username or password.</p>
+            )}
+            <button
+              type="submit"
+              disabled={!loginUser.trim() || !loginPass}
+              className="w-full bg-white text-black font-medium py-3 rounded-xl text-sm
+                         hover:bg-white/90 active:scale-[0.98] transition-all
+                         disabled:opacity-30 disabled:cursor-not-allowed mt-1"
+            >
+              Sign in
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── Main app (only rendered when authed) ──────────────────────────────────
   return (
     <div className="min-h-screen bg-[#0f0f0f] text-white flex flex-col">
 
-      {/* ── Sticky top bar ───────────────────────────────────────────── */}
+      {/* ── Sticky top bar ─────────────────────────────────────────────── */}
       <div className="sticky top-0 z-20 bg-[#0f0f0f]/95 backdrop-blur border-b border-white/10">
         <div className="max-w-5xl mx-auto px-6 py-4 space-y-3">
 
-          {/* Brand */}
-          <div className="flex items-center gap-2">
-            <span className="font-bold tracking-tight">ShopAgent</span>
-            <span className="text-xs text-white/35 border border-white/10 rounded-full px-2 py-0.5">
-              powered by Nebius
-            </span>
+          {/* Brand row + sign out */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="font-bold tracking-tight">ShopAgent</span>
+              <span className="text-xs text-white/35 border border-white/10 rounded-full px-2 py-0.5">
+                powered by Nebius
+              </span>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="text-xs text-white/30 hover:text-white/60 transition-colors"
+            >
+              Sign out
+            </button>
           </div>
 
           {/* Search bar */}
@@ -109,7 +206,7 @@ export default function Home() {
               disabled={loading}
             />
             <button
-              onClick={handleSend}
+              onClick={() => handleSend()}
               disabled={!query.trim() || loading}
               className="bg-white text-black font-medium px-6 py-3 rounded-xl text-sm
                          hover:bg-white/90 active:scale-95 transition-all
@@ -145,7 +242,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* ── Body ──────────────────────────────────────────────────────── */}
+      {/* ── Body ───────────────────────────────────────────────────────── */}
       <div className="flex-1 max-w-5xl mx-auto w-full px-6 py-8">
 
         {/* Empty state */}
